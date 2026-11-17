@@ -373,7 +373,11 @@ app.use((err, req, res, next) => {
   let message = err.message || "Erro.";
   if (err.type === "entity.too.large") message = "Imagem muito grande pra enviar. Tire um print menor ou recorte só a cotação.";
   else if (err.code === "EROFS" || err.code === "EACCES" || err.code === "EPERM") { status = 503; message = "O servidor não consegue gravar arquivos. Na Vercel, crie um Blob store (Storage → Blob), conecte ao projeto e faça o deploy de novo."; }
-  else if (/^Blob/.test(err.name || "")) { status = 503; message = `Falha no Vercel Blob: ${err.message}. Confira se o Blob store está conectado ao projeto (Storage → Blob → Projects).`; }
+  // O SDK do Blob nem sempre dá nome à classe do erro; a mensagem sempre começa com "Vercel Blob:".
+  else if (/^Blob/.test(err.name || "") || /^Vercel Blob:/.test(err.message || "")) {
+    status = 503;
+    message = `Falha no armazenamento (Vercel Blob): ${String(err.message).replace(/^Vercel Blob:\s*/, "").slice(0, 300)}. Confira em Storage → Blob se o store existe, está conectado ao projeto e não estourou o limite do plano.`;
+  }
   else if (status >= 500 && IS_PROD) message = `Erro interno no servidor (${err.name || "Error"}). Tente de novo.`;
   if (status >= 500) console.error(err);
   res.status(status).json({ error: message });
