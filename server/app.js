@@ -264,7 +264,7 @@ app.post("/api/proposals", requireAuth, rateLimit({ windowMs: 10 * 60 * 1000, ma
     const now = new Date().toISOString();
     const proposal = { id: store.newId(), ...parsed.data, createdAt: now, updatedAt: now, stats: { views: 0, chosenOption: null } };
     await store.saveProposal(proposal);
-    for (const o of proposal.options) for (const h of o.hotels) await store.addToLibrary({ name: h.name, city: h.city, photos: h.photos });
+    await store.addHotelsToLibrary(proposal.options.flatMap((o) => o.hotels));
     res.status(201).json({ id: proposal.id, url: `${publicUrl(req)}/p/${proposal.id}`, proposal });
   } catch (err) { next(err); }
 });
@@ -277,7 +277,7 @@ app.put("/api/proposals/:id", requireAuth, rateLimit({ windowMs: 10 * 60 * 1000,
     if (!parsed.success) return res.status(400).json({ error: describeIssues(parsed.error), issues: parsed.error.issues.slice(0, 5) });
     const proposal = { ...existing, ...parsed.data, id: existing.id, createdAt: existing.createdAt, stats: existing.stats, updatedAt: new Date().toISOString() };
     await store.saveProposal(proposal);
-    for (const o of proposal.options) for (const h of o.hotels) await store.addToLibrary({ name: h.name, city: h.city, photos: h.photos });
+    await store.addHotelsToLibrary(proposal.options.flatMap((o) => o.hotels));
     res.json({ id: proposal.id, url: `${publicUrl(req)}/p/${proposal.id}`, proposal });
   } catch (err) { next(err); }
 });
@@ -295,9 +295,13 @@ app.get("/api/public/proposals/:id", rateLimit({ windowMs: 60 * 1000, max: 120 }
   try {
     const p = await store.getProposal(req.params.id);
     if (!p) return res.status(404).json({ error: "Orçamento não encontrado." });
-    if (req.query.preview !== "1") {
+    // Conta 1 visita por navegador a cada 12h (cookie). Cada contagem regrava o orçamento no armazenamento,
+    // que tem cota de operações; contar toda abertura/recarga gastava a cota à toa.
+    const seenCookie = `v_${p.id}`;
+    if (req.query.preview !== "1" && !parseCookies(req.headers.cookie)[seenCookie]) {
       p.stats = { ...(p.stats || {}), views: (p.stats?.views || 0) + 1, lastViewedAt: new Date().toISOString() };
       store.saveProposal(p).catch(() => {});
+      res.setHeader("Set-Cookie", `${seenCookie}=1; Max-Age=43200; Path=/; HttpOnly; SameSite=Lax${IS_PROD ? "; Secure" : ""}`);
     }
     res.json({ proposal: sanitizeForPublic(p) });
   } catch (err) { next(err); }

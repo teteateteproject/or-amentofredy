@@ -33,6 +33,7 @@ export function sniffImage(buf) {
 
 /* ---------- Propostas ---------- */
 export async function saveProposal(proposal) {
+  listCache = null;
   if (!isValidId(proposal.id)) throw new Error("id inválido");
   await backend.writeJson(`proposals/${proposal.id}.json`, proposal);
   return proposal;
@@ -41,8 +42,11 @@ export async function getProposal(id) {
   if (!isValidId(id)) return null;
   return backend.readJson(`proposals/${id}.json`);
 }
+let listCache = null; // { at, all }
+const LIST_TTL = 2 * 60 * 1000;
 export async function listProposals({ limit = 50 } = {}) {
-  const all = await backend.listJson("proposals/");
+  if (!listCache || Date.now() - listCache.at > LIST_TTL) listCache = { at: Date.now(), all: await backend.listJson("proposals/") };
+  const all = listCache.all;
   const items = all.map((p) => ({
     id: p.id,
     clientName: p.clientName,
@@ -101,24 +105,34 @@ export async function getLibraryHotel(key) {
   return h ? summarize(h) : null;
 }
 const isPhotoUrl = (u) => typeof u === "string" && (u.startsWith("/uploads/") || /^https:\/\//.test(u));
-/** Adiciona fotos à biblioteca do hotel (chamado quando um orçamento é gerado). */
-export async function addToLibrary({ name, city, photos }) {
-  if (!name || !photos?.length) return;
-  const lib = await readLibrary();
+/** Junta as fotos de um hotel na biblioteca em memória. Devolve true se mudou algo. */
+function mergeHotel(lib, { name, city, photos }) {
+  if (!name || !photos?.length) return false;
   const key = hotelKey(name, city);
   let h = lib.hotels.find((x) => x.key === key);
+  let changed = false;
   if (!h) {
     h = { key, name, city: city || "", photos: [] };
     lib.hotels.push(h);
+    changed = true;
   }
-  let changed = !h.photos.length;
   for (const url of photos) {
     if (!isPhotoUrl(url) || h.photos.some((p) => p.url === url)) continue;
     h.photos.push({ url, reported: false, addedAt: new Date().toISOString() });
     changed = true;
   }
+  return changed;
+}
+/** Adiciona as fotos de vários hotéis com uma leitura e no máximo uma gravação (o Blob cobra cada gravação). */
+export async function addHotelsToLibrary(hotels = []) {
+  const withPhotos = hotels.filter((h) => h?.name && h.photos?.length);
+  if (!withPhotos.length) return;
+  const lib = await readLibrary();
+  let changed = false;
+  for (const h of withPhotos) changed = mergeHotel(lib, h) || changed;
   if (changed) await writeLibrary(lib);
 }
+export const addToLibrary = (hotel) => addHotelsToLibrary([hotel]);
 export async function reportLibraryPhoto(key, url) {
   const lib = await readLibrary();
   const h = lib.hotels.find((x) => x.key === key);
